@@ -1,0 +1,4 @@
+requests==2.32.3
+openai==1.35.0
+numpy==1.26.4
+logzero==1.7.3
