@@ -108,45 +108,69 @@ function ScanRow({ r, onAnalyze }: { r: ScanResult; onAnalyze: (symbol: string) 
 
 // ── Scanner Tab ───────────────────────────────────────────────
 function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
-  const [results,  setResults]  = useState<ScanResult[]>([]);
-  const [summary,  setSummary]  = useState<any>(null);
-  const [loading,  setLoading]  = useState(false);
-  const [autoOn,   setAutoOn]   = useState(false);
-  const [autoSec,  setAutoSec]  = useState(60);
-  const [lastScan, setLastScan] = useState<string>('');
-  const [filter,   setFilter]   = useState<string>('ALL');
-  const [watchlist,setWatchlist]= useState<string>('');
-  const [editWL,   setEditWL]   = useState(false);
+  const [results,    setResults]    = useState<ScanResult[]>([]);
+  const [summary,    setSummary]    = useState<any>(null);
+  const [loading,    setLoading]    = useState(false);
+  const [autoOn,     setAutoOn]     = useState(false);
+  const [autoSec,    setAutoSec]    = useState(60);
+  const [lastScan,   setLastScan]   = useState<string>('');
+  const [filter,     setFilter]     = useState<string>('ALL');
+  const [masterList, setMasterList] = useState<string[]>([]);
+  const [showMaster, setShowMaster] = useState(false);
+  const [addInput,   setAddInput]   = useState('');
+  const [saving,     setSaving]     = useState(false);
   const timerRef = useRef<any>(null);
+
+  // Load master watchlist on mount
+  useEffect(() => {
+    fetch('/api/watchlist').then(r => r.json()).then(d => setMasterList(d.watchlist || [])).catch(() => {});
+  }, []);
 
   const scan = useCallback(async () => {
     setLoading(true);
     try {
-      const wl = watchlist.trim()
-        ? watchlist.split('\n').map(s => s.trim().toUpperCase()).filter(Boolean)
-        : undefined;
-      const r  = await fetch('/api/scanner', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(wl ? { watchlist: wl } : {}),
-      });
+      const r = await fetch('/api/scanner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       const d = await r.json();
-      if (d.results) {
-        setResults(d.results);
-        setSummary(d.summary);
-        setLastScan(new Date().toLocaleTimeString('en-IN'));
-      }
+      if (d.results) { setResults(d.results); setSummary(d.summary); setLastScan(new Date().toLocaleTimeString('en-IN')); }
+      if (d.masterList) setMasterList(d.masterList);
     } catch {} finally { setLoading(false); }
-  }, [watchlist]);
+  }, []);
 
   useEffect(() => {
-    if (autoOn) {
-      timerRef.current = setInterval(scan, autoSec * 1000);
-    } else {
-      clearInterval(timerRef.current);
-    }
+    if (autoOn) { timerRef.current = setInterval(scan, autoSec * 1000); }
+    else { clearInterval(timerRef.current); }
     return () => clearInterval(timerRef.current);
   }, [autoOn, autoSec, scan]);
+
+  async function addToMaster(syms: string) {
+    const symbols = syms.split(/[\s,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (!symbols.length) return;
+    setSaving(true);
+    try {
+      const r = await fetch('/api/watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbols }) });
+      const d = await r.json();
+      setMasterList(d.watchlist);
+      setAddInput('');
+    } catch {} finally { setSaving(false); }
+  }
+
+  async function removeFromMaster(symbol: string) {
+    try {
+      const r = await fetch('/api/watchlist', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) });
+      const d = await r.json();
+      setMasterList(d.watchlist);
+    } catch {}
+  }
+
+  // When scan result is clicked — also add to master
+  function handleAnalyze(symbol: string) {
+    // Add to master if not already there
+    if (!masterList.includes(symbol)) {
+      fetch('/api/watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) })
+        .then(r => r.json()).then(d => setMasterList(d.watchlist)).catch(() => {});
+    }
+    onAnalyze(symbol);
+  }
 
   const filtered = filter === 'ALL' ? results : results.filter(r => r.signal === filter);
   const buys     = results.filter(r => r.signal === 'BUY');
@@ -171,20 +195,53 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
           <option value={120}>2 min</option>
           <option value={300}>5 min</option>
         </select>
-        <button onClick={() => setEditWL(e => !e)}
-          style={{ background: C.bg3, border: `1px solid ${C.border2}`, borderRadius: 8, padding: '7px 14px', color: C.muted2, fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}>
-          {editWL ? 'Hide' : '✏ Edit watchlist'}
+        <button onClick={() => setShowMaster(m => !m)}
+          style={{ background: showMaster ? `${C.blue}20` : C.bg3, border: `1px solid ${showMaster ? C.blue : C.border2}`, borderRadius: 8, padding: '7px 14px', color: showMaster ? C.blue : C.muted2, fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}>
+          📋 Master list ({masterList.length})
         </button>
         {lastScan && <span style={{ fontSize: 11, color: C.muted2, marginLeft: 'auto' }}>Last scan: {lastScan}</span>}
       </div>
 
-      {/* Watchlist editor */}
-      {editWL && (
-        <div style={{ background: C.card, border: `1px solid ${C.border2}`, borderRadius: 10, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 12, color: C.muted2, marginBottom: 8 }}>One symbol per line. Leave blank to use default watchlist (30 stocks).</div>
-          <textarea value={watchlist} onChange={e => setWatchlist(e.target.value)}
-            placeholder={'RELIANCE\nHDFCBANK\nTITAGARH\nSUZLON\n...'}
-            style={{ width: '100%', background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, fontFamily: 'DM Mono, monospace', resize: 'vertical', minHeight: 140, boxSizing: 'border-box' }} />
+      {/* Master watchlist manager */}
+      {showMaster && (
+        <div style={{ background: C.card, border: `1px solid ${C.border2}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 12 }}>
+            Master Watchlist — {masterList.length} stocks
+          </div>
+
+          {/* Add stocks */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <input value={addInput} onChange={e => setAddInput(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key === 'Enter' && addToMaster(addInput)}
+              placeholder="Add symbols: SBIN, TITAGARH, GALLANT..."
+              style={{ flex: 1, background: C.bg2, border: `1px solid ${C.border2}`, borderRadius: 8, padding: '8px 12px', color: C.text, fontSize: 13, fontFamily: 'DM Sans' }} />
+            <button onClick={() => addToMaster(addInput)} disabled={saving || !addInput.trim()}
+              style={{ background: C.green, border: 'none', borderRadius: 8, padding: '8px 16px', color: '#080e17', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'DM Sans', opacity: !addInput.trim() ? 0.5 : 1 }}>
+              {saving ? '...' : '+ Add'}
+            </button>
+          </div>
+
+          {/* Stock chips */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {masterList.map(sym => (
+              <div key={sym} style={{ display: 'flex', alignItems: 'center', gap: 4, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 7, padding: '4px 10px' }}>
+                <span onClick={() => handleAnalyze(sym)}
+                  style={{ fontSize: 12, fontWeight: 600, color: C.text, cursor: 'pointer', fontFamily: 'monospace' }}
+                  onMouseEnter={e => (e.target as HTMLElement).style.color = C.green}
+                  onMouseLeave={e => (e.target as HTMLElement).style.color = C.text}>
+                  {sym}
+                </span>
+                <button onClick={() => removeFromMaster(sym)}
+                  style={{ background: 'none', border: 'none', color: C.muted, fontSize: 14, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 11, color: C.muted2, marginTop: 10 }}>
+            Click any symbol to analyze · × to remove · Stocks auto-save to watchlist.json
+          </div>
         </div>
       )}
 
@@ -211,11 +268,9 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
         <div style={{ display: 'grid', gridTemplateColumns: sells.length > 0 ? '1fr 1fr' : '1fr', gap: 10, marginBottom: 14 }}>
           {buys.length > 0 && (
             <div style={{ background: `${C.green}08`, border: `1px solid ${C.green}20`, borderRadius: 10, padding: '12px 14px' }}>
-              <div style={{ fontSize: 11, color: C.green, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Top BUY opportunities
-              </div>
+              <div style={{ fontSize: 11, color: C.green, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Top BUY opportunities</div>
               {buys.slice(0, 3).map(r => (
-                <div key={r.symbol} onClick={() => onAnalyze(r.symbol)}
+                <div key={r.symbol} onClick={() => handleAnalyze(r.symbol)}
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: `0.5px solid ${C.border}`, cursor: 'pointer' }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{r.symbol}</span>
@@ -231,11 +286,9 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
           )}
           {sells.length > 0 && (
             <div style={{ background: `${C.red}08`, border: `1px solid ${C.red}20`, borderRadius: 10, padding: '12px 14px' }}>
-              <div style={{ fontSize: 11, color: C.red, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Top SELL opportunities
-              </div>
+              <div style={{ fontSize: 11, color: C.red, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Top SELL opportunities</div>
               {sells.slice(0, 3).map(r => (
-                <div key={r.symbol} onClick={() => onAnalyze(r.symbol)}
+                <div key={r.symbol} onClick={() => handleAnalyze(r.symbol)}
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: `0.5px solid ${C.border}`, cursor: 'pointer' }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{r.symbol}</span>
@@ -267,15 +320,14 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
       {/* Results table */}
       {filtered.length > 0 ? (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
-          {/* Header */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.7fr 0.7fr 0.8fr 0.7fr 0.7fr 0.9fr 1.5fr', gap: 0, padding: '9px 16px', borderBottom: `1px solid ${C.border}` }}>
             {['Symbol', 'LTP', 'Change', 'Book', 'Range', 'Volume', 'Signal', 'Note'].map(h => (
               <span key={h} style={{ fontSize: 10, color: C.muted2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</span>
             ))}
           </div>
-          {filtered.map(r => <ScanRow key={r.symbol} r={r} onAnalyze={onAnalyze} />)}
+          {filtered.map(r => <ScanRow key={r.symbol} r={r} onAnalyze={handleAnalyze} />)}
           <div style={{ padding: '8px 16px', fontSize: 11, color: C.muted2 }}>
-            Click any BUY/SELL row to open full analysis → switches to Analyze tab
+            Click any BUY/SELL row → full analysis + auto-adds to master list
           </div>
         </div>
       ) : (
@@ -284,14 +336,13 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
           <div style={{ fontSize: 15, marginBottom: 6 }}>
             {loading ? 'Scanning stocks...' : 'Click "Scan now" to find opportunities'}
           </div>
-          <div style={{ fontSize: 13 }}>
-            Scans {watchlist.trim() ? 'your custom watchlist' : '30 stocks'} · ranks by signal strength
-          </div>
+          <div style={{ fontSize: 13 }}>Scans your master watchlist · ranks by signal strength</div>
         </div>
       )}
     </div>
   );
 }
+
 
 // ── Analysis Card ─────────────────────────────────────────────
 function AnalysisCard({ a, onEnter }: { a: Analysis; onEnter: (a: Analysis) => void }) {

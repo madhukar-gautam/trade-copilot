@@ -3,6 +3,8 @@
 // Returns sorted list with BUY/SELL signals, book ratio, walls
 
 import { NextRequest, NextResponse } from 'next/server';
+import { join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 
 const GROWW_BASE = 'https://api.groww.in/v1/live-data/quote';
 
@@ -50,6 +52,41 @@ async function fetchQuote(symbol: string): Promise<any | null> {
   } catch {
     return null;
   }
+}
+
+function noDataRow(symbol: string) {
+  return {
+    symbol,
+    ltp: 0,
+    chgPct: 0,
+    volume: 0,
+    volQuality: 'NO_DATA',
+    bookRatio: 0,
+    rangePct: 0,
+    spread: 0,
+    dayHigh: 0,
+    dayLow: 0,
+    prevClose: 0,
+    buyWall: null,
+    sellWall: null,
+    longSL: 0,
+    shortSL: 0,
+    longT1: 0,
+    shortT1: 0,
+    longRR: 0,
+    shortRR: 0,
+    signal: 'NO_DATA',
+    confidence: 0,
+    score: 0,
+    alerts: ['No quote data (Groww API failed / symbol not available)'],
+    upperCircuit: 0,
+    lowerCircuit: 0,
+    week52High: 0,
+    week52Low: 0,
+    totalBuy: 0,
+    totalSell: 0,
+    scannedAt: new Date().toISOString(),
+  };
 }
 
 function analyzeStock(symbol: string, p: any) {
@@ -169,8 +206,33 @@ function analyzeStock(symbol: string, p: any) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body     = await req.json().catch(() => ({}));
-    const watchlist: string[] = body.watchlist || DEFAULT_WATCHLIST;
+    const body = await req.json().catch(() => ({}));
+
+    // Load master watchlist from watchlist.json, fallback to DEFAULT
+    let masterList: string[] = DEFAULT_WATCHLIST;
+    try {
+      const { readFileSync, existsSync } = await import('fs');
+      const { join } = await import('path');
+      const wlFile = join(process.cwd(), 'watchlist.json');
+      if (existsSync(wlFile)) masterList = JSON.parse(readFileSync(wlFile, 'utf-8'));
+    } catch {}
+
+    // Merge news watchlist if available
+    try {
+      const candidates = [
+        join(process.cwd(), 'news_watchlist.json'),      // dashboard/
+        join(process.cwd(), '..', 'news_watchlist.json') // repo root
+      ];
+      const newsPath = candidates.find(p => existsSync(p));
+      if (newsPath) {
+        const news   = JSON.parse(readFileSync(newsPath, 'utf-8'));
+        const banned = (news.banned_stocks || []).map((b: any) => b.symbol);
+        const newSym = (news.top_symbols   || []).filter((s: string) => !banned.includes(s));
+        masterList   = [...new Set([...newSym, ...masterList])].filter((s: string) => !banned.includes(s));
+      }
+    } catch {}
+
+    const watchlist: string[] = body.watchlist || masterList;
 
     // Fetch all stocks in parallel with concurrency limit
     const BATCH = 5; // 5 at a time to avoid rate limiting
@@ -181,11 +243,11 @@ export async function POST(req: NextRequest) {
       const fetched = await Promise.all(
         batch.map(async (symbol) => {
           const payload = await fetchQuote(symbol);
-          if (!payload) return null;
+          if (!payload) return noDataRow(symbol);
           return analyzeStock(symbol, payload);
         })
       );
-      results.push(...fetched.filter(Boolean));
+      results.push(...fetched);
 
       // Small delay between batches to be polite to Groww API
       if (i + BATCH < watchlist.length) {
@@ -195,7 +257,7 @@ export async function POST(req: NextRequest) {
 
     // Sort by signal priority then score
     const signalPriority: Record<string, number> = {
-      BUY: 3, SELL: 2, WAIT: 1, AVOID: 0,
+      BUY: 3, SELL: 2, WAIT: 1, AVOID: 0, NO_DATA: -1,
     };
 
     results.sort((a, b) => {
@@ -213,6 +275,7 @@ export async function POST(req: NextRequest) {
       sell:    results.filter(r => r.signal === 'SELL').length,
       wait:    results.filter(r => r.signal === 'WAIT').length,
       avoid:   results.filter(r => r.signal === 'AVOID').length,
+      noData:  results.filter(r => r.signal === 'NO_DATA').length,
       scannedAt: new Date().toISOString(),
     };
 
@@ -225,19 +288,38 @@ export async function POST(req: NextRequest) {
 
 
 export async function GET() {
-  // Load news watchlist if available, fallback to default
+  // Load persistent watchlist first, then merge with news watchlist if available
   try {
     const { readFileSync, existsSync } = await import('fs');
     const { join } = await import('path');
-    const newsFile = join(process.cwd(), '..', 'news_watchlist.json');
-    if (existsSync(newsFile)) {
-      const data = JSON.parse(readFileSync(newsFile, 'utf-8'));
+
+    // Load master watchlist
+    const wlFile = join(process.cwd(), 'watchlist.json');
+    let masterList = DEFAULT_WATCHLIST;
+    if (existsSync(wlFile)) {
+      try { masterList = JSON.parse(readFileSync(wlFile, 'utf-8')); } catch {}
+    }
+
+    // Merge with news watchlist if available (dashboard/ or repo root)
+    const candidates = [
+      join(process.cwd(), 'news_watchlist.json'),
+      join(process.cwd(), '..', 'news_watchlist.json'),
+    ];
+    const newsPath = candidates.find(p => existsSync(p));
+    if (newsPath) {
+      const data = JSON.parse(readFileSync(newsPath, 'utf-8'));
+      const newsSymbols = data.top_symbols || [];
+      const banned = (data.banned_stocks || []).map((b: any) => b.symbol);
+      // News stocks first, then master, remove banned
+      const merged = [...new Set([...newsSymbols, ...masterList])].filter(s => !banned.includes(s));
       return NextResponse.json({
-        watchlist:     data.top_symbols || DEFAULT_WATCHLIST,
+        watchlist:     merged,
+        masterList,
         newsWatchlist: data,
         hasNews:       true,
       });
     }
+    return NextResponse.json({ watchlist: masterList, masterList, hasNews: false });
   } catch {}
-  return NextResponse.json({ watchlist: DEFAULT_WATCHLIST, hasNews: false });
+  return NextResponse.json({ watchlist: DEFAULT_WATCHLIST, masterList: DEFAULT_WATCHLIST, hasNews: false });
 }
