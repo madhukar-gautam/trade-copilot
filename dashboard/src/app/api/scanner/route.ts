@@ -217,6 +217,13 @@ export async function POST(req: NextRequest) {
       if (existsSync(wlFile)) masterList = JSON.parse(readFileSync(wlFile, 'utf-8'));
     } catch {}
 
+    // Load exclusions (symbols hidden from scanner)
+    let exclusions: string[] = [];
+    try {
+      const exFile = join(process.cwd(), 'exclusions.json');
+      if (existsSync(exFile)) exclusions = JSON.parse(readFileSync(exFile, 'utf-8'));
+    } catch {}
+
     // Merge news watchlist if available
     try {
       const candidates = [
@@ -228,11 +235,12 @@ export async function POST(req: NextRequest) {
         const news   = JSON.parse(readFileSync(newsPath, 'utf-8'));
         const banned = (news.banned_stocks || []).map((b: any) => b.symbol);
         const newSym = (news.top_symbols   || []).filter((s: string) => !banned.includes(s));
-        masterList   = [...new Set([...newSym, ...masterList])].filter((s: string) => !banned.includes(s));
+        masterList = Array.from(new Set([...newSym, ...masterList]))
+          .filter((s: string) => !banned.includes(s));
       }
     } catch {}
 
-    const watchlist: string[] = body.watchlist || masterList;
+    const watchlist: string[] = (body.watchlist || masterList).filter((s: string) => !exclusions.includes(s));
 
     // Fetch all stocks in parallel with concurrency limit
     const BATCH = 5; // 5 at a time to avoid rate limiting
@@ -279,7 +287,7 @@ export async function POST(req: NextRequest) {
       scannedAt: new Date().toISOString(),
     };
 
-    return NextResponse.json({ results, summary, watchlist });
+    return NextResponse.json({ results, summary, watchlist, exclusions });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
@@ -311,7 +319,8 @@ export async function GET() {
       const newsSymbols = data.top_symbols || [];
       const banned = (data.banned_stocks || []).map((b: any) => b.symbol);
       // News stocks first, then master, remove banned
-      const merged = [...new Set([...newsSymbols, ...masterList])].filter(s => !banned.includes(s));
+      const merged = Array.from(new Set([...newsSymbols, ...masterList]))
+        .filter((s: string) => !banned.includes(s));
       return NextResponse.json({
         watchlist:     merged,
         masterList,

@@ -64,14 +64,14 @@ function Badge({ text, color }: { text: string; color: string }) {
 }
 
 // ── Scanner Row ───────────────────────────────────────────────
-function ScanRow({ r, onAnalyze }: { r: ScanResult; onAnalyze: (symbol: string) => void }) {
+function ScanRow({ r, onAnalyze, onDelete }: { r: ScanResult; onAnalyze: (symbol: string) => void; onDelete: (symbol: string) => void }) {
   const color  = SIG_COLOR[r.signal] || C.muted2;
   const isGood = r.signal === 'BUY' || r.signal === 'SELL';
 
   return (
-    <div onClick={() => isGood && onAnalyze(r.symbol)}
+    <div
       style={{
-        display: 'grid', gridTemplateColumns: '1fr 0.7fr 0.7fr 0.8fr 0.7fr 0.7fr 0.9fr 1.5fr',
+        display: 'grid', gridTemplateColumns: '1fr 0.7fr 0.7fr 0.8fr 0.7fr 0.7fr 0.9fr 1.5fr 0.25fr',
         gap: 0, padding: '10px 16px', borderBottom: `0.5px solid ${C.border}`,
         alignItems: 'center', cursor: isGood ? 'pointer' : 'default',
         background: isGood ? `${color}06` : 'transparent',
@@ -80,28 +80,37 @@ function ScanRow({ r, onAnalyze }: { r: ScanResult; onAnalyze: (symbol: string) 
       onMouseEnter={e => isGood && ((e.currentTarget as HTMLElement).style.background = `${color}12`)}
       onMouseLeave={e => isGood && ((e.currentTarget as HTMLElement).style.background = `${color}06`)}
     >
-      <div>
+      <div onClick={() => isGood && onAnalyze(r.symbol)}>
         <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{r.symbol}</span>
         {r.buyWall  && <span style={{ fontSize: 9, color: C.green, marginLeft: 6 }}>BW</span>}
         {r.sellWall && <span style={{ fontSize: 9, color: C.red,   marginLeft: 4 }}>SW</span>}
       </div>
-      <span style={{ fontFamily: 'monospace', fontSize: 13, color: C.text }}>₹{fmt(r.ltp)}</span>
-      <span style={{ fontFamily: 'monospace', fontSize: 12, color: r.chgPct >= 0 ? C.green : C.red }}>
+      <span onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontFamily: 'monospace', fontSize: 13, color: C.text }}>₹{fmt(r.ltp)}</span>
+      <span onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontFamily: 'monospace', fontSize: 12, color: r.chgPct >= 0 ? C.green : C.red }}>
         {r.chgPct >= 0 ? '+' : ''}{fmt(r.chgPct)}%
       </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 12, color: r.bookRatio > 1.3 ? C.green : r.bookRatio < 0.77 ? C.red : C.muted2 }}>
+      <span onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontFamily: 'monospace', fontSize: 12, color: r.bookRatio > 1.3 ? C.green : r.bookRatio < 0.77 ? C.red : C.muted2 }}>
         {fmt(r.bookRatio)}:1
       </span>
-      <span style={{ fontSize: 12, color: r.rangePct > 80 ? C.red : r.rangePct < 20 ? C.green : C.text2, fontFamily: 'monospace' }}>
+      <span onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontSize: 12, color: r.rangePct > 80 ? C.red : r.rangePct < 20 ? C.green : C.text2, fontFamily: 'monospace' }}>
         {fmt(r.rangePct, 0)}%
       </span>
-      <span style={{ fontSize: 11, color: r.volQuality === 'EXCELLENT' ? C.green : r.volQuality === 'GOOD' ? C.blue : r.volQuality === 'THIN' ? C.amber : C.red }}>
+      <span onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontSize: 11, color: r.volQuality === 'EXCELLENT' ? C.green : r.volQuality === 'GOOD' ? C.blue : r.volQuality === 'THIN' ? C.amber : C.red }}>
         {fmtVol(r.volume)}
       </span>
-      <Badge text={`${r.signal}${r.confidence > 0 ? ` ${r.confidence}%` : ''}`} color={color} />
-      <div style={{ fontSize: 11, color: C.muted2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div onClick={() => isGood && onAnalyze(r.symbol)}>
+        <Badge text={`${r.signal}${r.confidence > 0 ? ` ${r.confidence}%` : ''}`} color={color} />
+      </div>
+      <div onClick={() => isGood && onAnalyze(r.symbol)} style={{ fontSize: 11, color: C.muted2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {r.alerts.length > 0 ? r.alerts[0] : isGood ? `SL ₹${fmt(r.signal === 'BUY' ? r.longSL : r.shortSL)} · T1 ₹${fmt(r.signal === 'BUY' ? r.longT1 : r.shortT1)}` : '—'}
       </div>
+      <button
+        onClick={e => { e.stopPropagation(); onDelete(r.symbol); }}
+        title={`Remove ${r.symbol} from watchlist`}
+        style={{ background: 'none', border: 'none', color: C.muted, fontSize: 16, cursor: 'pointer', padding: '2px 4px', lineHeight: 1, borderRadius: 4, transition: 'color 0.15s' }}
+        onMouseEnter={e => (e.currentTarget.style.color = C.red)}
+        onMouseLeave={e => (e.currentTarget.style.color = C.muted)}
+      >×</button>
     </div>
   );
 }
@@ -155,10 +164,13 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
   }
 
   async function removeFromMaster(symbol: string) {
+    // Optimistic update — remove from UI immediately
+    setResults(prev => prev.filter(r => r.symbol !== symbol));
+    setMasterList(prev => prev.filter(s => s !== symbol));
     try {
       const r = await fetch('/api/watchlist', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) });
       const d = await r.json();
-      setMasterList(d.watchlist);
+      if (d.watchlist) setMasterList(d.watchlist);
     } catch {}
   }
 
@@ -320,12 +332,12 @@ function ScannerTab({ onAnalyze }: { onAnalyze: (symbol: string) => void }) {
       {/* Results table */}
       {filtered.length > 0 ? (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.7fr 0.7fr 0.8fr 0.7fr 0.7fr 0.9fr 1.5fr', gap: 0, padding: '9px 16px', borderBottom: `1px solid ${C.border}` }}>
-            {['Symbol', 'LTP', 'Change', 'Book', 'Range', 'Volume', 'Signal', 'Note'].map(h => (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.7fr 0.7fr 0.8fr 0.7fr 0.7fr 0.9fr 1.5fr 0.25fr', gap: 0, padding: '9px 16px', borderBottom: `1px solid ${C.border}` }}>
+            {['Symbol', 'LTP', 'Change', 'Book', 'Range', 'Volume', 'Signal', 'Note', ''].map(h => (
               <span key={h} style={{ fontSize: 10, color: C.muted2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</span>
             ))}
           </div>
-          {filtered.map(r => <ScanRow key={r.symbol} r={r} onAnalyze={handleAnalyze} />)}
+          {filtered.map(r => <ScanRow key={r.symbol} r={r} onAnalyze={handleAnalyze} onDelete={removeFromMaster} />)}
           <div style={{ padding: '8px 16px', fontSize: 11, color: C.muted2 }}>
             Click any BUY/SELL row → full analysis + auto-adds to master list
           </div>
@@ -659,17 +671,27 @@ function EnterModal({ analysis, onClose, onSave }: { analysis: Analysis; onClose
 
 // ── Main App ──────────────────────────────────────────────────
 export default function App() {
-  const [tab,       setTab]      = useState<'scanner'|'analyze'|'open'|'history'>('scanner');
+  const [tab,       setTab]      = useState<'scanner'|'analyze'|'open'|'history'|'settings'>('scanner');
   const [symbol,    setSymbol]   = useState('');
   const [analysis,  setAnalysis] = useState<Analysis | null>(null);
   const [analyzing, setAnalyzing]= useState(false);
   const [error,     setError]    = useState('');
   const [trades,    setTrades]   = useState<Trade[]>([]);
-  const [modal,     setModal]    = useState<Analysis | null>(null);
+  const [modal,      setModal]     = useState<Analysis | null>(null);
+  const [gptAlerts,  setGptAlerts] = useState<any[]>([]);
+  const [alertDismissed, setAlertDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetch('/api/trades').then(r => r.json()).then(setTrades).catch(() => {});
+    // Poll GPT alerts every 30s
+    const fetchAlerts = () => fetch('/api/signals').then(r => r.json())
+      .then(d => setGptAlerts(d.alerts || [])).catch(() => {});
+    fetchAlerts();
+    const t = setInterval(fetchAlerts, 30000);
+    return () => clearInterval(t);
   }, []);
+
+  const activeAlerts = gptAlerts.filter(a => !alertDismissed.has(a.alerted_at));
 
   const openTrades   = trades.filter(t => t.status === 'OPEN');
   const closedTrades = trades.filter(t => t.status === 'CLOSED');
@@ -704,10 +726,11 @@ export default function App() {
   }
 
   const TABS = [
-    { id: 'scanner', label: '📡 Scanner' },
-    { id: 'analyze', label: '🎯 Analyze' },
-    { id: 'open',    label: `📊 Active${openTrades.length > 0 ? ` (${openTrades.length})` : ''}` },
-    { id: 'history', label: `📜 History${closedTrades.length > 0 ? ` (${closedTrades.length})` : ''}` },
+    { id: 'scanner',  label: '📡 Scanner' },
+    { id: 'analyze',  label: '🎯 Analyze' },
+    { id: 'open',     label: `📊 Active${openTrades.length > 0 ? ` (${openTrades.length})` : ''}` },
+    { id: 'history',  label: `📜 History${closedTrades.length > 0 ? ` (${closedTrades.length})` : ''}` },
+    { id: 'settings', label: '⚙ Settings' },
   ] as const;
 
   return (
@@ -736,7 +759,45 @@ export default function App() {
         )}
       </div>
 
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '20px 16px' }}>
+      <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 24px' }}>
+
+        {/* GPT-4o Alert Banners */}
+        {activeAlerts.slice(0, 3).map((alert: any) => {
+          const color = alert.signal === 'BUY' ? C.green : alert.signal === 'SHORT' ? C.red : C.amber;
+          return (
+            <div key={alert.alerted_at} style={{ background: `${color}15`, border: `1.5px solid ${color}40`, borderRadius: 12, padding: '12px 16px', marginBottom: 10, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color }}>🤖 GPT-4o · {alert.symbol}</span>
+                  <span style={{ background: `${color}25`, color, border: `1px solid ${color}40`, padding: '1px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700 }}>{alert.signal} {alert.confidence}%</span>
+                  <span style={{ fontSize: 11, color: C.muted2, marginLeft: 'auto' }}>{new Date(alert.alerted_at).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'})}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, fontFamily: 'monospace', color: C.text2, marginBottom: 6 }}>
+                  {alert.entry && <span>Entry ₹{alert.entry}</span>}
+                  {alert.sl1   && <span style={{color: C.red}}>SL1 ₹{alert.sl1}</span>}
+                  {alert.sl2   && <span style={{color: C.red}}>SL2 ₹{alert.sl2}</span>}
+                  {alert.t1    && <span style={{color: C.green}}>T1 ₹{alert.t1}</span>}
+                  {alert.t2    && <span style={{color: C.green}}>T2 ₹{alert.t2}</span>}
+                  {alert.rr_t1 && <span>R:R {alert.rr_t1}x</span>}
+                </div>
+                {alert.reasoning && <div style={{ fontSize: 12, color: C.text2, lineHeight: 1.5 }}>{alert.reasoning}</div>}
+                {alert.warning   && <div style={{ fontSize: 11, color: C.amber, marginTop: 4 }}>⚠ {alert.warning}</div>}
+                {alert.sl1_reason && <div style={{ fontSize: 11, color: C.muted2, marginTop: 2 }}>SL1: {alert.sl1_reason}</div>}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <button onClick={() => { setSymbol(alert.symbol); setTab('analyze'); }}
+                  style={{ background: color, border: 'none', borderRadius: 7, padding: '5px 12px', color: '#080e17', fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'DM Sans' }}>
+                  Analyze →
+                </button>
+                <button onClick={() => setAlertDismissed(prev => new Set([...prev, alert.alerted_at]))}
+                  style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, padding: '5px 12px', color: C.muted2, fontSize: 11, cursor: 'pointer', fontFamily: 'DM Sans' }}>
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 3, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 11, padding: 3, marginBottom: 20, width: 'fit-content' }}>
           {TABS.map(({ id, label }) => (
@@ -848,9 +909,110 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* Settings tab */}
+        {tab === 'settings' && (
+          <SettingsTab />
+        )}
       </div>
 
       {modal && <EnterModal analysis={modal} onClose={() => setModal(null)} onSave={saveTrade} />}
+    </div>
+  );
+}
+
+// ── Settings Tab ──────────────────────────────────────────────
+function SettingsTab() {
+  const [password, setPassword] = useState('');
+  const [token,    setToken]    = useState('');
+  const [cookie,   setCookie]   = useState('');
+  const [status,   setStatus]   = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [tokenInfo,setTokenInfo]= useState<any>(null);
+
+  useEffect(() => {
+    fetch('/api/token').then(r => r.json()).then(setTokenInfo).catch(() => {});
+  }, []);
+
+  async function updateToken() {
+    if (!password || !token) return;
+    setLoading(true); setStatus('');
+    try {
+      const r = await fetch('/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, token, cookie }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        setStatus('✅ Token updated successfully! Scanner will use new token immediately.');
+        setTokenInfo({ hasToken: true, updatedAt: d.updatedAt, tokenHint: token.slice(0, 20) + '...' });
+        setToken(''); setCookie(''); setPassword('');
+      } else {
+        setStatus(`❌ ${d.error}`);
+      }
+    } catch (e: any) { setStatus(`❌ ${e.message}`); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div style={{ maxWidth: 500 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>⚙ Settings</div>
+      <div style={{ fontSize: 13, color: C.muted2, marginBottom: 20 }}>Update your Groww API token daily from anywhere.</div>
+
+      {/* Token status */}
+      {tokenInfo && (
+        <div style={{ background: C.card, border: `1px solid ${tokenInfo.hasToken ? C.green : C.red}30`, borderRadius: 10, padding: '12px 16px', marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: C.muted2, marginBottom: 4 }}>Current token status</div>
+          <div style={{ fontSize: 13, color: tokenInfo.hasToken ? C.green : C.red, fontWeight: 600 }}>
+            {tokenInfo.hasToken ? '✅ Token set' : '❌ No token'}
+          </div>
+          {tokenInfo.updatedAt && <div style={{ fontSize: 11, color: C.muted2, marginTop: 4 }}>Last updated: {new Date(tokenInfo.updatedAt).toLocaleString('en-IN')}</div>}
+          {tokenInfo.tokenHint && <div style={{ fontSize: 11, color: C.muted2, fontFamily: 'monospace', marginTop: 2 }}>{tokenInfo.tokenHint}</div>}
+        </div>
+      )}
+
+      {/* How to get token */}
+      <div style={{ background: `${C.amber}10`, border: `1px solid ${C.amber}20`, borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: C.text2, lineHeight: 1.8 }}>
+        <div style={{ fontWeight: 600, color: C.amber, marginBottom: 6 }}>How to get today's token:</div>
+        1. Open groww.in in Chrome<br/>
+        2. Press F12 → Network tab<br/>
+        3. Search any stock<br/>
+        4. Click any api.groww.in request<br/>
+        5. Copy Authorization header value<br/>
+        6. Copy Cookie header value<br/>
+        7. Paste both below
+      </div>
+
+      {/* Token update form */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted2, marginBottom: 6 }}>
+            Admin password
+            <span style={{ marginLeft: 8, color: C.muted, fontStyle: 'italic' }}>
+              (default: trade123 — set ADMIN_PASSWORD in .env.local to change)
+            </span>
+          </div>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            placeholder="trade123"
+            style={{ width: '100%', background: C.bg2, border: `1px solid ${C.border2}`, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, fontFamily: 'DM Sans', boxSizing: 'border-box' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: C.muted2, marginBottom: 6 }}>Authorization token</div>
+          <textarea value={token} onChange={e => setToken(e.target.value)}
+            placeholder="Bearer eyJhbGciOiJIUzI1NiJ9..."
+            style={{ width: '100%', background: C.bg2, border: `1px solid ${C.border2}`, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 12, fontFamily: 'monospace', resize: 'vertical', minHeight: 80, boxSizing: 'border-box' }} />
+        </div>
+        <button onClick={updateToken} disabled={loading || !password || !token}
+          style={{ background: loading ? C.muted : C.green, border: 'none', borderRadius: 10, padding: '12px 0', color: '#080e17', fontWeight: 700, fontSize: 14, cursor: loading ? 'wait' : 'pointer', fontFamily: 'DM Sans', opacity: (!password || !token) ? 0.5 : 1 }}>
+          {loading ? 'Updating...' : 'Update token'}
+        </button>
+        {status && (
+          <div style={{ background: status.startsWith('✅') ? `${C.green}15` : `${C.red}15`, border: `1px solid ${status.startsWith('✅') ? C.green : C.red}30`, borderRadius: 8, padding: '10px 14px', fontSize: 13, color: status.startsWith('✅') ? C.green : C.red }}>
+            {status}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
